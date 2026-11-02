@@ -50,9 +50,12 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
     /// <summary>The maps whose block in the system ZIP is missing, unreadable or stale (its
     /// source hash differs from the data's now); every map with <paramref name="all"/>.</summary>
     /// <param name="only">The maps to look at (default every map in the data).</param>
-    public IReadOnlyList<int> Stale(bool all = false, IEnumerable<int>? only = null)
+    /// <param name="progress">(0, total) as a full check starts, then (done, total) after each map it reads;
+    /// not called when the stamp matches.</param>
+    public IReadOnlyList<int> Stale(bool all = false, IEnumerable<int>? only = null, Action<int, int>? progress = null)
     {
         var maps = only?.ToArray() ?? MapBaker.MapNumbers(data);
+        _checked = (maps, maps);
         if (all || !File.Exists(ZipPath))
         {
             return maps;
@@ -62,9 +65,12 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
         var stamp = Stamp(maps);
         if (ReadStamp() == stamp)
         {
+            _checked = (maps, []);
             return [];
         }
 
+        // (0, n) first: opening the ZIP and the inputs is the slow part on a phone's shared storage.
+        progress?.Invoke(0, maps.Length);
         if (OpenZip() is not { } zip)
         {
             return maps;
@@ -74,15 +80,19 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
         using (zip)
         using (var inputs = new BakeInputs(data, BakeTables.Shipped))
         {
+            var done = 0;
             foreach (var n in maps)
             {
                 if (!zip.TryGetEntry(MapBaker.PathOf(n), out var entry) || !Fresh(zip, entry, inputs))
                 {
                     stale.Add(n);
                 }
+
+                progress?.Invoke(++done, maps.Length);
             }
         }
 
+        _checked = (maps, stale.ToArray());
         if (stale.Count == 0)
         {
             WriteStamp(stamp);
@@ -90,6 +100,11 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
 
         return stale;
     }
+
+    /// <summary>The last <see cref="Stale"/>: the maps looked at and those it found stale (or may be).
+    /// A <see cref="Bake"/> of all the stale ones leaves every map fresh: it writes the stamp, and so
+    /// does <see cref="BakeMissions"/> while every map is fresh (the ZIP it rewrites is in the stamp).</summary>
+    private (int[] Maps, int[] Stale)? _checked;
 
     /// <summary>Beside the system ZIP: <see cref="Stamp"/> of the last check that found every block fresh.</summary>
     private string StampPath => ZipPath + ".stamp";
@@ -108,15 +123,29 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
         text.Append(CultureInfo.InvariantCulture, $"build {typeof(MapBaker).Assembly.ManifestModule.ModuleVersionId} {typeof(SkyNet.Data.GameTables).Assembly.ManifestModule.ModuleVersionId}\n");
         foreach (var dir in new[] { data.Dir, data.SkyNetDir }.OfType<string>().Distinct())
         {
-            AppendEntries(text, dir, "");
+            AppendEntries(text, dir);
         }
 
-        AppendEntries(text, ModsDirectory, Path.GetFileName(StampPath));
+        AppendEntries(text, ModsDirectory, NotAnInput);
         return text.ToString();
     }
 
-    // Each entry of a folder: name, size and time (a folder's name only), "skip" left out.
-    private static void AppendEntries(System.Text.StringBuilder text, string dir, string skip)
+    // The mods folder's files no block of this data set reads: its own stamp and ZIP temp, and the
+    // other data set's system files (shock.zip, its stamp, temp and .pak), which that game rewrites.
+    private bool NotAnInput(string name)
+    {
+        var own = Path.GetFileName(ZipPath);
+        if (name.Equals(own + ".stamp", StringComparison.OrdinalIgnoreCase) || name.Equals(own + ".tmp", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var other = SystemModName(data.Game == GameKind.FutureShock ? GameKind.SkyNet : GameKind.FutureShock);
+        return name.StartsWith(other + ".", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Each entry of a folder: name, size and time (a folder's name only), those "skip" names left out.
+    private static void AppendEntries(System.Text.StringBuilder text, string dir, Func<string, bool>? skip = null)
     {
         if (!Directory.Exists(dir))
         {
@@ -126,7 +155,7 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
         text.Append(CultureInfo.InvariantCulture, $"in {dir}\n");
         foreach (var e in new DirectoryInfo(dir).EnumerateFileSystemInfos().OrderBy(e => e.Name, StringComparer.Ordinal))
         {
-            if (e.Name == skip)
+            if (skip?.Invoke(e.Name) == true)
             {
                 continue;
             }
@@ -327,12 +356,26 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
             $"{bytes / 1024} KB of blocks and {grounds} grounds written in {(clock.Elapsed - baked).TotalMilliseconds:0} ms; " +
             $"{Path.GetFileName(ZipPath)} is {new FileInfo(ZipPath).Length / 1024} KB");
         RemoveLegacyPak();
+        StampBaked(maps, blocks);
         if (remount)
         {
             Mount();
         }
 
         return blocks.Count(b => b != null);
+    }
+
+    // After a bake of every map the last check found stale (each baked): all its maps are fresh, so
+    // the next start skips the check. The stamp is taken now, with the ZIP as written.
+    private void StampBaked(IReadOnlyList<int> maps, MapBlock?[] blocks)
+    {
+        if (_checked is not { } last || blocks.Any(b => b == null) || !last.Stale.All(maps.Contains))
+        {
+            return;
+        }
+
+        _checked = (last.Maps, []);
+        WriteStamp(Stamp(last.Maps));
     }
 
     /// <summary>The folder of the shared ground layers in the ZIP (<see cref="MapGround.PathOf"/>).</summary>
@@ -426,6 +469,11 @@ public sealed class BlockStore(string modsDirectory, GameData data) : IDisposabl
 
         Log.Info("Bake", $"{files.Count} mission files generated in {clock.Elapsed.TotalMilliseconds:0} ms");
         RemoveLegacyPak();
+        if (_checked is { Stale.Length: 0 } fresh)
+        {
+            WriteStamp(Stamp(fresh.Maps));
+        }
+
         if (remount)
         {
             Mount();

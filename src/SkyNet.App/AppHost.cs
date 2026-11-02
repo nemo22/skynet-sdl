@@ -247,7 +247,7 @@ internal sealed partial class AppHost : IDisposable
         Log.Info("Window", $"{windowMode} {(windowMode == WindowMode.Windowed ? windowSize.ToString() : window.Desktop.Size.ToString())}");
 
         // The game's actions (their ids are the tick input's bits, a demo's too): SkyNet.Game's
-        // CampaignControls; the on-screen buttons where TOUCH LAYOUT put them (taken at start, kept
+        // CampaignControls; the on-screen buttons where TOUCH LAYOUT put them (again on each save, kept
         // on this window's screen).
         controls = CampaignControls.Create(PlacedTouch(settings));
         actions = controls.Actions;
@@ -270,6 +270,8 @@ internal sealed partial class AppHost : IDisposable
         renderer.DepthSharing = options.DepthSharing ?? DefaultDepthSharing;
         renderer.Gamma = settings.Gamma;
         ViewStyles.Apply(renderer, settings);
+
+        StartHints();
 
         input = new Input(actions);
         Log.Info("Render", $"GPU: {renderer.Gpu.Device} on {GpuBackends.Name(renderer.Gpu.Backend)}, driver {renderer.Gpu.DriverVersion}");
@@ -402,6 +404,7 @@ internal sealed partial class AppHost : IDisposable
             OnMapEntered = EnterLevel,
             OnMissionStarted = (mission, briefing, restart) =>
             {
+                loadScreen = LoadScreen.Shown;
                 hud.ClearMessages();
                 // A demo playing goes on through the mission screen (its ticks never stood still for it).
                 if (showBriefing && playback == null)
@@ -411,6 +414,7 @@ internal sealed partial class AppHost : IDisposable
                         StatisticsHeader = session.StatsHeader(session.BriefingStats),
                         Pilot = session.Pilot,
                         Statistics = session.StatsRows(session.BriefingStats),
+                        Movie = mission.BriefingMovie,
                     });
                     ReleaseMouse();
                 }
@@ -443,6 +447,7 @@ internal sealed partial class AppHost : IDisposable
         };
         menuEvents.OnQuitToTitle = () =>
         {
+            winMovie.Drop();
             var watching = dm?.Replay != null;
             StopDemos("the game was left");
             if (watching)
@@ -478,6 +483,8 @@ internal sealed partial class AppHost : IDisposable
         };
         menuEvents.OnStartGame = (kind, number, pilot) =>
         {
+            winMovie.Drop();
+            CloseKeyboard();
             StopDemos("a new game started");
             if (kind != data.Game && !SwitchGame(kind))
             {
@@ -492,11 +499,13 @@ internal sealed partial class AppHost : IDisposable
                 // A new game: the start kit, full health, the dialog's name and call sign.
                 weapons.Inventory.Reset();
                 session.Pilot = pilot;
-                session.StartMission(mission);
+                StartNewGame(mission);
             }
         };
         menuEvents.OnLoadGame = slot =>
         {
+            winMovie.Drop();
+            CloseKeyboard();
             if (!menu.InGame && TitleSlot(slot) is { } titleSlot && titleSlot.Game != data.Game && !SwitchGame(titleSlot.Game))
             {
                 menu.OpenTitle();
@@ -509,7 +518,11 @@ internal sealed partial class AppHost : IDisposable
         };
         menuEvents.OnSaveGame = SaveGame;
         // START on the network screens: the same start as --host / --join.
-        menuEvents.OnStartNetGame = o => StartNet(options.NetBind is { } bind ? o with { Bind = bind } : o, fromMenu: true);
+        menuEvents.OnStartNetGame = o =>
+        {
+            CloseKeyboard();
+            return StartNet(options.NetBind is { } bind ? o with { Bind = bind } : o, fromMenu: true);
+        };
         menuEvents.OnStopNetGame = () =>
         {
             dm?.Dispose();
@@ -539,6 +552,8 @@ internal sealed partial class AppHost : IDisposable
         commands.Executed += (command, words) => recording?.Command(command, words);
         DevDisplays.Register(commands, displays);
         RegisterAppCommands();
+        RegisterMovieCommand();
+        WireMovies();
         KeyBinds.Register(commands, keyBinds);
         keyBinds.Changed += SaveKeyBinds;
 
@@ -611,6 +626,7 @@ internal sealed partial class AppHost : IDisposable
         {
             menu.OpenTitle();
             PlayTitleMusic();
+            PlayOpening();
         }
 
         if (options.PlayScript is { } windowedScript)
@@ -699,6 +715,7 @@ internal sealed partial class AppHost : IDisposable
         endBanner?.Dispose();
         audio?.Dispose();
         churn?.Dispose();
+        perfHints?.Dispose();
         renderer?.Dispose();
         window?.Dispose();
     }
@@ -807,6 +824,8 @@ internal sealed partial class AppHost : IDisposable
     // behind the same frame, and the loop forgets the time the load took (no catch-up burst).
     void EnterLevel(GameSession s)
     {
+        // The load runs at the load's target: the cores ramped up (ADPF; off the phone a no-op).
+        using var hinted = perfHints?.Loading();
         WaitForFrames();
         GcPacing.Loading();
         // The MODS screen's textures and models (its tables wait for a game's start).
@@ -850,16 +869,24 @@ internal sealed partial class AppHost : IDisposable
         level.Moon = s.Moon;
         level.Floors = s.World;
         var robotsMs = clock.Elapsed.TotalMilliseconds;
+        if (dm == null)
+        {
+            LoadingStage("Preparing the map...", 1f / 2f, robotsMs);
+            PrepareAutomap();
+        }
+
+        var automapMs = clock.Elapsed.TotalMilliseconds;
         using (Prof.Zone(AppZones.WarmUp))
         {
-            LoadingStage("Compiling shaders...", 2f / 3f, robotsMs);
-            // The look's light, haze and sprite materials, the colour textures asked for, and the pipelines.
+            LoadingStage("Preparing models...", 2f / 3f, automapMs);
+            // The look's models (sprites as models, robots, guns in hand), light, haze and materials, and the pipelines.
             ApplyLook(settings);
         }
 
         var warmMs = clock.Elapsed.TotalMilliseconds;
         using (Prof.Zone(AppZones.UploadFlush))
         {
+            LoadingStage("Preparing textures...", 5f / 6f, warmMs);
             renderer.FlushUploads();
         }
 
@@ -886,7 +913,7 @@ internal sealed partial class AppHost : IDisposable
             $"{level.ModelCount} models, {level.SpriteCount} sprites ({level.PickupCount} pickups); collision {s.CollisionStats.Triangles} triangles; " +
             $"built in {clock.Elapsed.TotalMilliseconds:0} ms ({level.LoadTime.TotalMilliseconds:0} ms level, " +
             (level.BakeTime > TimeSpan.Zero ? $"its block baked in {level.BakeTime.TotalMilliseconds:0} ms)" : "from its block)") +
-            $"; steps: level {levelMs:0} ms, robots {robotsMs - levelMs:0} ms, warm-up {warmMs - robotsMs:0} ms, uploads {uploadMs - warmMs:0} ms");
+            $"; steps: level {levelMs:0} ms, robots {robotsMs - levelMs:0} ms, automap {automapMs - robotsMs:0} ms, warm-up {warmMs - automapMs:0} ms, uploads {uploadMs - warmMs:0} ms");
         if (level.Missing.Count > 0)
         {
             Log.Warn("Level", $"Missing: {string.Join(", ", level.Missing)}");
@@ -985,6 +1012,7 @@ internal sealed partial class AppHost : IDisposable
         var (width, height) = FrameSize();
         var menuInput = MenuInput.From(input, renderer.CanvasPoint) with { Held = input.IsHeld(Pointer.Left) };
         menu.Update(menuInput, MenuFrame.Fit(width, height), seconds);
+        IdleCredits(menuInput, seconds);
         if (menuInput.Wheel != 0f)
         {
             // The menu had the wheel: it adds up until a latch, which menus do not make.
@@ -1045,6 +1073,14 @@ internal sealed partial class AppHost : IDisposable
 
     private enum KeyboardState { Off, Shown, Closed }
 
+    // A game starts from a dialog with a text box (pilot name, net game): the phone keyboard goes now,
+    // not at the next menu frame, which comes only after the load and covered its progress.
+    void CloseKeyboard()
+    {
+        window.TextInputs.Want(MenuTextField, false);
+        menuKeyboard = KeyboardState.Off;
+    }
+
     // bind / unbind: the key binds and every action's keys into the settings file; the rest of the file
     // as it is on disk.
     void SaveKeyBinds()
@@ -1096,14 +1132,8 @@ internal sealed partial class AppHost : IDisposable
     }
 
     // The settings, applied: the panel art, DIFFICULTY, the two volumes, RENDER DETAIL and DISPLAY.
-    /// <summary>TOUCH LAYOUT's stick: fixed where placed, else where the finger lands.</summary>
-    void ApplyStick(MenuSettings s)
-    {
-        if (window.TouchSettings is { } touch)
-        {
-            touch.FixedStick = PlacedTouch(s).Stick;
-        }
-    }
+    /// <summary>TOUCH LAYOUT's places, at once: the buttons, the stick and the pause button.</summary>
+    void ApplyStick(MenuSettings s) => PlacedTouch(s).Apply(actions, window.TouchSettings);
 
     /// <summary>TOUCH LAYOUT's places kept on the window's screen (a hand-edited file may put them off it).</summary>
     TouchLayout PlacedTouch(MenuSettings s)
@@ -1176,8 +1206,14 @@ internal sealed partial class AppHost : IDisposable
         }
 
         ApplyStereoSettings(s);
-        ApplyLook(s);
+        // On the title the quit game's map is hidden: its models, guns and textures wait for the next
+        // map's load (EnterLevel), so a MODS tap only mounts (seconds on a phone otherwise).
+        var hidden = menuRef is { InGame: false, Current.OverGame: false } && dm == null;
+        ApplyLook(s, hidden ? LookScope.Renderer : LookScope.Map);
     }
+
+    // What ApplyLook makes: the renderer's look alone, or the map's too (its models, guns, pipelines).
+    private enum LookScope { Renderer, Map }
 
     // The DISPLAY screen's LOOK on the map shown (live): ORIGINAL keeps the palette look; ENHANCED
     // lights the map with its preset (LookLighting) and the ENHANCED OPTIONS (shadows, anti-aliasing,
@@ -1207,7 +1243,7 @@ internal sealed partial class AppHost : IDisposable
         renderer.WarmUp(materials);
     }
 
-    void ApplyLook(MenuSettings s)
+    void ApplyLook(MenuSettings s, LookScope scope = LookScope.Map)
     {
         WaitForFrames();
         var enhanced = s.Look == Look.Enhanced && level != null;
@@ -1224,7 +1260,7 @@ internal sealed partial class AppHost : IDisposable
         }
 
         weaponView.Apply(renderer.Lighting);
-        if (level == null)
+        if (level == null || scope == LookScope.Renderer)
         {
             return;
         }
@@ -1399,10 +1435,30 @@ internal sealed partial class AppHost : IDisposable
         try
         {
             var clock = Stopwatch.StartNew();
-            var stale = store.Stale();
+            // A slow full check (phone shared storage) shows its count; a quick one shows nothing.
+            var checking = new LoadProgress("CHECKING GAME DATA", p =>
+            {
+                if (clock.Elapsed.TotalMilliseconds >= LongLoadMs)
+                {
+                    DrawLoading(p.Text, p.Fraction);
+                }
+            });
+            var stale = store.Stale(progress: (done, total) =>
+            {
+                // A full check started: its screen at once, before its slow first step.
+                if (done == 0)
+                {
+                    checking.Begin(total);
+                    DrawLoading(checking.Text, 0f);
+                    return;
+                }
+
+                checking.Step();
+            });
             Log.Info("Bake", $"{Path.GetFileName(store.ZipPath)}: {stale.Count} map blocks to bake (checked in {clock.Elapsed.TotalMilliseconds:0} ms)");
             if (stale.Count > 0)
             {
+                DrawPreparing(0, stale.Count);
                 store.Bake(stale, (done, total) =>
                 {
                     Log.Info("Bake", $"PREPARING GAME DATA {done}/{total}");
@@ -1445,6 +1501,8 @@ internal sealed class SessionEvents : ISessionListener
     public Action<Mission?>? OnRestartOffered;
     public Action<string>? OnHint, OnObjective, OnStatus;
     public Action<string, byte>? OnColouredStatus;
+    public Action<Mission>? OnMissionComplete;
+    public Action? OnCampaignComplete;
 
     public void MapEntered(GameSession session) => OnMapEntered?.Invoke(session);
     public void MissionStarted(Mission mission, Briefing? briefing, bool restart) => OnMissionStarted?.Invoke(mission, briefing, restart);
@@ -1453,4 +1511,6 @@ internal sealed class SessionEvents : ISessionListener
     public void Objective(string text) => OnObjective?.Invoke(text);
     public void Status(string text) => OnStatus?.Invoke(text);
     public void Status(string text, byte colour) => OnColouredStatus?.Invoke(text, colour);
+    public void MissionComplete(Mission mission) => OnMissionComplete?.Invoke(mission);
+    public void CampaignComplete() => OnCampaignComplete?.Invoke();
 }

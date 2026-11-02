@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Numerics;
 using RetroEng.Render;
 using SkyNet.Game.Hud;
@@ -8,8 +7,7 @@ namespace SkyNet.Game.Menu;
 /// <summary>TOUCH LAYOUT (CONTROLS → TOUCH LAYOUT, a touch screen only): the on-screen controls
 /// over the dimmed screen, edited by <see cref="TouchEditor"/>. A finger (the mouse) drags; keys:
 /// Up / Down pick a control, Left / Right shrink or grow it, Enter saves, Back cancels.
-/// Saved places go to the settings; the buttons take them at the next start (the engine keeps its
-/// buttons), the stick at once.</summary>
+/// Saved places go to the settings and the controls take them at once.</summary>
 internal sealed class TouchLayoutScreen : MenuScreen
 {
     public const string Id = "touchlayout";
@@ -18,9 +16,9 @@ internal sealed class TouchLayoutScreen : MenuScreen
     private const string Help = "DRAG TO MOVE - SELECT, THEN SMALLER / BIGGER - RESET: SELECTED, AGAIN: ALL";
     /// <summary>The stick's caption once placed (it no longer floats to the finger).</summary>
     private const string FixedStick = "MOVE (FIXED)";
-    /// <summary>The engine's pause button (drawn so the player sees it is kept clear).</summary>
+    /// <summary>The engine's pause button's caption.</summary>
     private const string PauseLabel = "||";
-    private const string SavedNote = "TOUCH LAYOUT SAVED: BUTTONS MOVE AT NEXT START";
+    private const string SavedNote = "TOUCH LAYOUT SAVED";
     /// <summary>The play HUD's font (the buttons' words).</summary>
     private const string ButtonFont = "FONT0000.FNT";
 
@@ -115,19 +113,12 @@ internal sealed class TouchLayoutScreen : MenuScreen
         var canvas = p.Frame.Window;
         var unit = canvas.Height / MathF.Max(screen.Y, 1f);
         var room = TouchLayout.Room(controls, screen, Menu.Settings.HudStyle);
-        var pause = room.Pause;
-        var canvasPause = pause.IsEmpty ? pause : new RectangleF(pause.X * unit, pause.Y * unit, pause.Width * unit, pause.Height * unit);
-        editor.Measure(new TouchRoom(new Vector2(canvas.Width, canvas.Height), room.Side * unit, room.Floor * unit, canvasPause));
+        editor.Measure(new TouchRoom(new Vector2(canvas.Width, canvas.Height), room.Side * unit, room.Floor * unit));
 
         var r = p.Renderer;
         r.FillRect(canvas, Dim);
         var font = p.Font(ButtonFont);
         var line = MathF.Max(1f, MathF.Round(2f * controls.Scale)) * unit;
-        if (!canvasPause.IsEmpty)
-        {
-            TouchView.Button(r, canvasPause, PauseLabel, TouchView.Shade.Idle, font, line, unit);
-        }
-
         foreach (var id in editor.Ids.Reverse())
         {
             var area = editor.AreaOf(id);
@@ -140,7 +131,7 @@ internal sealed class TouchLayoutScreen : MenuScreen
                 continue;
             }
 
-            TouchView.Button(r, area, id, shade, font, line, unit);
+            TouchView.Button(r, area, id == TouchLayout.PauseId ? PauseLabel : id, shade, font, line, unit);
         }
 
         foreach (var (tool, area) in editor.Tools)

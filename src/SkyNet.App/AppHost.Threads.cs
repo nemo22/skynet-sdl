@@ -25,11 +25,34 @@ internal sealed partial class AppHost
     /// <summary>The frame-build thread of a split loop; null: single.</summary>
     private FrameBuildThread<FrameSnapshot>? frameBuild;
 
+    /// <summary>Android's performance hints (ADPF) over the frame's threads; elsewhere a no-op.</summary>
+    private PerfHints? perfHints;
+
     /// <summary>The loop's frame callback; a split loop's frame build is started here.</summary>
     private Action<float> FrameCallback()
     {
         frameBuild = options.Threads == LoopThreads.Split ? new FrameBuildThread<FrameSnapshot>(SnapshotBuffers, () => new FrameSnapshot(), BuildFrame) : null;
-        return DrawFrame;
+        return HintedFrame;
+    }
+
+    /// <summary>A frame, then its work told to the hints.</summary>
+    private void HintedFrame(float alpha)
+    {
+        DrawFrame(alpha);
+        perfHints?.Frame();
+    }
+
+    /// <summary>Main: the hints' session, its target one refresh of the window's display (the game has no frame cap).</summary>
+    private void StartHints()
+    {
+        perfHints = PerfHints.Start(PerfHints.FrameTarget(window.Desktop.Refresh, FrameLimiter.Off));
+        if (!perfHints.Active)
+        {
+            Log.Info("Perf", "Android performance hints unavailable");
+            return;
+        }
+
+        Log.Info("Perf", $"Android performance hints on, target {perfHints.Target.TotalMilliseconds:0.##} ms");
     }
 
     /// <summary>The simulation (or main before the loop): waits until no frame is being drawn, before
@@ -55,6 +78,8 @@ internal sealed partial class AppHost
             try
             {
                 ThreadGuard.TakeTurn();
+                // The ticks and the capture count in the hints' frame work.
+                FrameThreads.Join();
                 // The zone timer nests the zones of the thread that made it: the ticks' and the capture's.
                 zoneTimes = new ZoneTimes();
                 ApplyZoneTimer();
@@ -76,6 +101,7 @@ internal sealed partial class AppHost
             }
             finally
             {
+                FrameThreads.Leave();
                 Volatile.Write(ref running, 0);
             }
         })

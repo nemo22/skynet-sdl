@@ -382,7 +382,7 @@ public sealed class MapBlockTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(fresh, Read(ZipPack.Open(store.ZipPath), 213));
     }
 
-    public enum StampChange { None, Stamp, DataTouched, DataEdited, ModAdded }
+    public enum StampChange { None, Stamp, DataTouched, DataEdited, ModAdded, OtherGameBaked }
 
     [Theory]
     [InlineData(StampChange.None)]
@@ -390,6 +390,7 @@ public sealed class MapBlockTests(ITestOutputHelper output) : IDisposable
     [InlineData(StampChange.DataTouched)]
     [InlineData(StampChange.DataEdited)]
     [InlineData(StampChange.ModAdded)]
+    [InlineData(StampChange.OtherGameBaked)]
     public void TheStampSkipsTheCheckUntilAnInputChanges(StampChange change)
     {
         if (Data() is not { } real)
@@ -455,9 +456,70 @@ public sealed class MapBlockTests(ITestOutputHelper output) : IDisposable
             case StampChange.ModAdded:
                 Directory.CreateDirectory(Path.Combine(mods, "newmod", "maps"));
                 break;
+            case StampChange.OtherGameBaked:
+                // Future Shock's system files are no input of SkyNET's blocks.
+                foreach (var name in new[] { "shock.zip", "shock.zip.stamp", "shock.zip.tmp", "shock.pak" })
+                {
+                    File.WriteAllText(Path.Combine(mods, name), "baked");
+                }
+
+                expected = [];
+                break;
         }
 
         Assert.Equal(expected, store.Stale(only: maps));
+    }
+
+    [Fact]
+    public void ABakeLeavingNothingStaleWritesTheStamp()
+    {
+        if (Data() is not { } data)
+        {
+            return;
+        }
+
+        int[] maps = [211, 213];
+        using (var store = new BlockStore(_temp, data))
+        {
+            Assert.Equal(2, store.Bake(store.Stale(only: maps)));
+            // The first start then generates the mission files into the same ZIP.
+            Assert.NotEqual(0, store.BakeMissions(store.StaleMissions()));
+        }
+
+        // MAP.211's block goes stale behind the stamp's back: only a full check would see it.
+        var zipPath = new BlockStore(_temp, data).ZipPath;
+        var zipTime = File.GetLastWriteTimeUtc(zipPath);
+        var zipBytes = File.ReadAllBytes(zipPath);
+        string hash;
+        using (var zip = ZipPack.Open(zipPath))
+        {
+            hash = zip.Entries.Single(e => e.Path == MapBaker.PathOf(211)).SourceHash;
+        }
+
+        var at = System.Text.Encoding.Latin1.GetString(zipBytes).IndexOf(hash, StringComparison.Ordinal) + hash.Length - 1;
+        zipBytes[at] = (byte)(zipBytes[at] == '0' ? '1' : '0');
+        File.WriteAllBytes(zipPath, zipBytes);
+        File.SetLastWriteTimeUtc(zipPath, zipTime);
+
+        // The next start takes the stamp: no check.
+        using var next = new BlockStore(_temp, data);
+        Assert.Empty(next.Stale(only: maps));
+    }
+
+    [Fact]
+    public void TheCheckReportsProgress()
+    {
+        if (Data() is not { } data)
+        {
+            return;
+        }
+
+        int[] maps = [211, 213];
+        using var store = new BlockStore(_temp, data);
+        store.Bake(maps);
+        var seen = new List<(int, int)>();
+        Assert.Empty(store.Stale(only: maps, progress: (done, total) => seen.Add((done, total))));
+        Assert.Equal([(0, 2), (1, 2), (2, 2)], seen);
     }
 
     private static byte[] Read(ZipPack zip, int number)

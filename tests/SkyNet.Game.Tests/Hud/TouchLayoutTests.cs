@@ -1,5 +1,5 @@
-using System.Drawing;
 using System.Numerics;
+using RetroEng.Platform;
 using SkyNet.Game.Hud;
 using SkyNet.Game.Menu;
 
@@ -11,7 +11,7 @@ public class TouchLayoutTests
 {
     private static readonly Vector2 Screen = new(640f, 360f);
     private const float Side = 50f;
-    private static readonly TouchRoom Room = new(Screen, Side, Screen.Y, RectangleF.Empty);
+    private static readonly TouchRoom Room = new(Screen, Side, Screen.Y);
 
     [Fact]
     public void GridMatchesTheEnginesColumnsAndRows()
@@ -135,12 +135,61 @@ public class TouchLayoutTests
     }
 
     [Fact]
-    public void SpotStaysOffThePauseButton()
+    public void PauseDefaultMatchesTheEngine()
     {
-        // The pause square at the top right: a button dropped on it goes the shortest way out (down).
-        var room = Room with { Pause = new RectangleF(590f, 0f, 50f, 50f) };
-        var spot = TouchLayout.SpotAt("FIRE", new Vector2(610f, 40f), 1f, room);
-        Assert.Equal(new Vector2(610f, 75f), TouchLayout.Centre(spot, Screen, Side));
+        // The engine's pause: the grid's top-right square, margin 0.18 of a button from both edges.
+        var margin = 0.18f * Side;
+        var centre = TouchLayout.Centre(TouchLayout.PauseDefault, Screen, Side);
+        Assert.Equal(new Vector2(Screen.X - margin - Side / 2f, margin + Side / 2f), centre);
+    }
+
+    [Fact]
+    public void ApplyPutsThePlacesOnTheEngine()
+    {
+        var actions = new ActionSet();
+        var fire = actions.Add("Fire");
+        actions.AddTouch(fire, "FIRE", 0, 0).AddTouch(actions.Add("Jump"), "JUMP", 1, 0);
+        var touch = new TouchControls();
+        var layout = new TouchLayout(new Dictionary<string, string>
+        {
+            ["FIRE"] = "0,1,2,-2,1.5",
+            [TouchLayout.PauseId] = "0,0,1,1,0.8",
+            // A layout saved before the stick could be resized: size 1.
+            [TouchLayout.StickId] = "0,1,2,-3,1",
+        });
+
+        layout.Apply(actions, touch);
+        Assert.Equal(new TouchPlace(new Vector2(0f, 1f), new Vector2(2f, -2f)), actions.Touch[0].Place);
+        Assert.Equal(1.5f, actions.Touch[0].Size);
+        Assert.Equal(TouchLayout.Grid(1, 0).Place, actions.Touch[1].Place);
+        Assert.Equal(new TouchPlace(Vector2.Zero, Vector2.One), touch.PausePlace);
+        Assert.Equal(0.8f, touch.PauseSize);
+        Assert.Equal(new TouchPlace(new Vector2(0f, 1f), new Vector2(2f, -3f)), touch.FixedStick);
+        Assert.Equal(1f, touch.StickScale);
+
+        // Every default back: the grid, the top-right pause, a floating stick.
+        new TouchLayout(new Dictionary<string, string>()).Apply(actions, touch);
+        Assert.Equal(TouchLayout.Grid(0, 0).Place, actions.Touch[0].Place);
+        Assert.Null(touch.PausePlace);
+        Assert.Null(touch.FixedStick);
+    }
+
+    [Fact]
+    public void OnlyFireAims()
+    {
+        var actions = SkyNet.Game.Campaign.CampaignControls.Create().Actions;
+
+        var aiming = actions.Touch.Where(s => s.Aim == TouchAim.Look).Select(s => s.Label);
+        Assert.Equal(["FIRE"], aiming);
+    }
+
+    [Fact]
+    public void ApplyKeepsTheAim()
+    {
+        var actions = SkyNet.Game.Campaign.CampaignControls.Create().Actions;
+
+        new TouchLayout(new Dictionary<string, string> { ["FIRE"] = "0,1,2,-2,1.5" }).Apply(actions, new TouchControls());
+        Assert.Equal(TouchAim.Look, actions.Touch.Single(s => s.Label == "FIRE").Aim);
     }
 
     [Fact]
@@ -207,14 +256,97 @@ public class TouchLayoutTests
     }
 
     [Fact]
-    public void EditorStickMovesButKeepsItsSize()
+    public void EditorResizesTheStick()
     {
         var editor = Editor();
         var stick = editor.AreaOf(TouchLayout.StickId);
         editor.Press(new Vector2(stick.X + stick.Width / 2f, stick.Y + stick.Height / 2f));
         editor.Release();
         editor.Use(TouchEditor.Tool.Bigger);
-        Assert.Equal(stick.Width, editor.AreaOf(TouchLayout.StickId).Width, 3);
+        Assert.True(editor.AreaOf(TouchLayout.StickId).Width > stick.Width);
+    }
+
+    [Fact]
+    public void EditorResizesAFloatingStickWithoutPlacingIt()
+    {
+        var editor = Editor();
+        var stick = editor.AreaOf(TouchLayout.StickId);
+        editor.Press(new Vector2(stick.X + stick.Width / 2f, stick.Y + stick.Height / 2f));
+        editor.Release();
+        editor.Use(TouchEditor.Tool.Bigger);
+        Assert.Null(editor.Layout.Stick);
+        Assert.True(editor.Changed);
+
+        // Saved as a size alone: it loads back floating, at its scale.
+        var actions = new ActionSet();
+        var touch = new TouchControls();
+        new TouchLayout(editor.Layout.Save()).Apply(actions, touch);
+        Assert.Null(touch.FixedStick);
+        Assert.Equal(1.1f, touch.StickScale, 3);
+
+        editor.Use(TouchEditor.Tool.Reset);
+        Assert.Empty(editor.Layout.Save());
+    }
+
+    [Theory]
+    [InlineData("1.3", 1.3f)]
+    [InlineData("9", 1f)]
+    [InlineData("x", 1f)]
+    public void StickSizeAloneLoads(string text, float scale)
+    {
+        var touch = new TouchControls();
+        new TouchLayout(new Dictionary<string, string> { [TouchLayout.StickId] = text }).Apply(new ActionSet(), touch);
+        Assert.Null(touch.FixedStick);
+        Assert.Equal(scale, touch.StickScale, 3);
+    }
+
+    [Fact]
+    public void EditorKeepsButtonsOffThePause()
+    {
+        // FIRE dragged onto the pause button stops beside it.
+        var editor = Editor();
+        var pause = editor.AreaOf(TouchLayout.PauseId);
+        var fire = editor.AreaOf("FIRE");
+        Drag(editor, "FIRE", new Vector2(pause.X - fire.X, pause.Y - fire.Y));
+        Assert.False(Overlap(editor.AreaOf("FIRE"), pause));
+
+        // Grown next to it, it still stays off.
+        for (var i = 0; i < 10; i++)
+        {
+            editor.Use(TouchEditor.Tool.Bigger);
+        }
+
+        Assert.False(Overlap(editor.AreaOf("FIRE"), pause));
+    }
+
+    [Fact]
+    public void EditorKeepsThePauseOffButtons()
+    {
+        var editor = Editor();
+        var pause = editor.AreaOf(TouchLayout.PauseId);
+        var fire = editor.AreaOf("FIRE");
+        Drag(editor, TouchLayout.PauseId, new Vector2(fire.X - pause.X, fire.Y - pause.Y));
+        Assert.False(Overlap(editor.AreaOf(TouchLayout.PauseId), editor.AreaOf("FIRE")));
+
+        for (var i = 0; i < 10; i++)
+        {
+            editor.Use(TouchEditor.Tool.Bigger);
+        }
+
+        Assert.False(Overlap(editor.AreaOf(TouchLayout.PauseId), editor.AreaOf("FIRE")));
+    }
+
+    [Fact]
+    public void EditorMovesThePauseButton()
+    {
+        var editor = Editor();
+        Assert.Contains(TouchLayout.PauseId, editor.Ids);
+        var pause = editor.AreaOf(TouchLayout.PauseId);
+        Assert.Equal(Screen.X - 0.18f * Side, pause.Right, 3);
+
+        Drag(editor, TouchLayout.PauseId, new Vector2(-300f, 0f));
+        Assert.Equal(pause.X - 300f, editor.AreaOf(TouchLayout.PauseId).X, 2);
+        Assert.Contains(TouchLayout.PauseId, editor.Layout.Save().Keys);
     }
 
     [Fact]
@@ -232,6 +364,10 @@ public class TouchLayoutTests
         editor.Measure(Room);
         return editor;
     }
+
+    /// <summary>Two areas share more than an edge (a pixel's tolerance).</summary>
+    private static bool Overlap(System.Drawing.RectangleF a, System.Drawing.RectangleF b) =>
+        System.Drawing.RectangleF.Inflate(a, -1f, -1f).IntersectsWith(b);
 
     /// <summary>A control dragged from its centre by <paramref name="by"/>.</summary>
     private static void Drag(TouchEditor editor, string id, Vector2 by)

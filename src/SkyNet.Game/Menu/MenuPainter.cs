@@ -35,6 +35,8 @@ public sealed class MenuPainter : IDisposable
     private readonly List<TextureHandle> _owned = [];
     private BsaArchive? _images0;
     private bool _imagesTried;
+    // The changing picture (a movie's): its textures and what they hold.
+    private (TextureHandle Pixels, TextureHandle Palette, byte[] Shown, Formats.Palette Colours, Size Size)? _picture;
 
     public MenuPainter(Renderer renderer, GameData data)
     {
@@ -333,6 +335,50 @@ public sealed class MenuPainter : IDisposable
         return text;
     }
 
+    /// <summary>A picture that changes from frame to frame (a movie's), its palette indices through
+    /// <paramref name="palette"/>, over a DOS rectangle; uploaded only when it changed.</summary>
+    public void Picture(ReadOnlySpan<byte> pixels, Size size, Formats.Palette palette, Rectangle target)
+    {
+        // Made again for another size or after the renderer let them go (a level scope released them).
+        if (_picture is not { } pic || pic.Size != size || !_renderer.Exists(pic.Pixels) || !_renderer.Exists(pic.Palette))
+        {
+            if (_picture is { } old)
+            {
+                Forget(old.Pixels);
+                Forget(old.Palette);
+            }
+
+            var shown = pixels.ToArray();
+            pic = (Own(_renderer.CreateIndexTexture(size.Width, size.Height, shown)), Own(_renderer.CreatePalette(Rgba(palette))), shown, palette, size);
+        }
+
+        // A new array for each upload: the renderer may still hold the last one.
+        if (!pixels.SequenceEqual(pic.Shown))
+        {
+            pic.Shown = pixels.ToArray();
+            _renderer.UpdateTexture(pic.Pixels, size.Width, size.Height, pic.Shown);
+        }
+
+        if (!ReferenceEquals(palette, pic.Colours))
+        {
+            pic.Colours = palette;
+            _renderer.UpdateTexture(pic.Palette, Formats.Palette.Colors, 1, Rgba(palette));
+        }
+
+        _picture = pic;
+        _renderer.DrawImage(pic.Pixels, pic.Palette, new Vector2(size.Width, size.Height), new RectangleF(0, 0, size.Width, size.Height), Frame.Canvas(target), Vector4.One);
+    }
+
+    // An owned texture let go before the painter's end (one the renderer still has).
+    private void Forget(TextureHandle t)
+    {
+        _owned.Remove(t);
+        if (_renderer.Exists(t))
+        {
+            _renderer.Destroy(t);
+        }
+    }
+
     private TextureHandle Own(TextureHandle t)
     {
         _owned.Add(t);
@@ -347,6 +393,7 @@ public sealed class MenuPainter : IDisposable
         }
 
         _owned.Clear();
+        _picture = null;
         _images.Clear();
         _cels.Clear();
         _palettes.Clear();

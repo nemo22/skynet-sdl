@@ -192,7 +192,11 @@ internal sealed partial class AppHost
         if (timedemoQuits)
         {
             quitting = true;
+            return;
         }
+
+        // As in Quake: a demo that played to its end goes back to the title, not a frozen map.
+        menuEvents.QuitToTitle();
     }
 
     // Ends a recording (written to its file) and a playback. The line for the console, null when

@@ -331,9 +331,11 @@ public sealed class GameSession
         _destruction = DestructionTable.Load();
         Locations = LocationNames.Load();
         _models = new EnemyModels(data);
-        if (data.Exists("MDMDBRIF.BSA"))
+        // Future Shock ships no STRINGS.PRS / VOICE.PRS: SKYNET.EXE reads SkyNET's briefing archive.
+        var (brifPath, brifVariant) = data.FrontArchive("MDMDBRIF.BSA");
+        if (File.Exists(brifPath))
         {
-            using var brif = data.OpenArchive("MDMDBRIF.BSA");
+            using var brif = BsaArchive.Open(brifPath, brifVariant);
             _strings = brif.Read("STRINGS.PRS") is { } s ? PrsFile.Parse(s) : null;
             _voices = brif.Read("VOICE.PRS") is { } v ? PrsFile.Parse(v) : null;
         }

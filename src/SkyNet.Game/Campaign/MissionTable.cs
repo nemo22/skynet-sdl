@@ -7,7 +7,14 @@ public enum PlayerMode { Foot = 0, Jeep = 4, Hk = 8 }
 
 /// <summary>One row of the mission table: the mission's number, the map it starts on (only the
 /// start map is in the table; every other map is reached through 0xF0 doorways) and the mode.</summary>
-public readonly record struct Mission(int Number, int StartMap, PlayerMode Mode);
+public readonly record struct Mission(int Number, int StartMap, PlayerMode Mode)
+{
+    /// <summary>The movie the BRIEFING tab plays (row +0x1B, "gamedata\seqNN.vid"); null: none.</summary>
+    public string? BriefingMovie { get; init; }
+
+    /// <summary>The movie after the mission is won, before the next (row +0x43); null: none.</summary>
+    public string? WinMovie { get; init; }
+}
 
 /// <summary>
 /// The campaign: SKYNET.EXE v1.01's mission table at 0x34846 (Future Shock mode 0x341ce), 0x5C bytes
@@ -17,8 +24,15 @@ public sealed class MissionTable
 {
     public static readonly MissionTable SkyNet = new(
     [
-        new(1, 210, PlayerMode.Foot), new(2, 220, PlayerMode.Jeep), new(3, 230, PlayerMode.Foot), new(4, 240, PlayerMode.Foot),
-        new(5, 252, PlayerMode.Foot), new(6, 260, PlayerMode.Jeep), new(7, 270, PlayerMode.Hk), new(8, 280, PlayerMode.Foot),
+        // The VID names: the row's +0x1B and +0x43 strings (SKYNET.EXE v1.01, docs/game-logic/fmv-sequences.md).
+        new(1, 210, PlayerMode.Foot) { BriefingMovie = "SEQ10" },
+        new(2, 220, PlayerMode.Jeep) { BriefingMovie = "SEQ20", WinMovie = "1STSCENE" },
+        new(3, 230, PlayerMode.Foot) { BriefingMovie = "SEQ30", WinMovie = "SEQ30A" },
+        new(4, 240, PlayerMode.Foot) { BriefingMovie = "SEQ40", WinMovie = "SUBSINK" },
+        new(5, 252, PlayerMode.Foot) { BriefingMovie = "SEQ50" },
+        new(6, 260, PlayerMode.Jeep) { BriefingMovie = "SEQ60", WinMovie = "SC2FINL" },
+        new(7, 270, PlayerMode.Hk) { BriefingMovie = "SEQ70" },
+        new(8, 280, PlayerMode.Foot) { BriefingMovie = "SEQ80", WinMovie = "SCENE3" },
     ]);
 
     public static readonly MissionTable FutureShock = new(

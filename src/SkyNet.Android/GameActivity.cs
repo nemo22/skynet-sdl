@@ -16,7 +16,7 @@ namespace SkyNet.Android;
 /// Program on SDL's main thread with the files <see cref="DataSetup"/> found. The user folder plays
 /// the desktop install folder's part: settings, saves, mods/ (baked maps too) and logs/ there.</summary>
 [Activity(Label = "@string/app_name", Icon = "@mipmap/ic_launcher", RoundIcon = "@mipmap/ic_launcher", Theme = "@android:style/Theme.Material.NoActionBar.Fullscreen",
-    ScreenOrientation = ScreenOrientation.SensorLandscape, LaunchMode = LaunchMode.SingleInstance, Exported = false,
+    ScreenOrientation = ScreenOrientation.SensorLandscape, LaunchMode = LaunchMode.SingleTask, Exported = false,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.Keyboard
         | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation | ConfigChanges.UiMode | ConfigChanges.SmallestScreenSize | ConfigChanges.Density)]
 public sealed class GameActivity : SDLActivity
@@ -24,15 +24,13 @@ public sealed class GameActivity : SDLActivity
     private const string MulticastTag = "SkyNET LAN games";
     private const string DataExtra = "data";
     private const string RootExtra = "root";
+    private const string ArgsFile = "args.txt";
     /// <summary>.NET's override of AppContext.BaseDirectory: the game keeps its user files there
     /// when it can write it (SettingsStore.UserFolder), as beside the exe on the desktop.</summary>
     private const string BaseDirectoryKey = "APP_CONTEXT_BASE_DIRECTORY";
 
     // Held while the game runs: without it many phones drop the LAN list's broadcasts.
     private WifiManager.MulticastLock? _multicast;
-
-    // Setup's backdrop over SDL's surface until the game's first frame: the start-up was ~4 s of black.
-    private Backdrop? _backdrop;
 
     protected override string[] GetLibraries() => ["SDL3"];
 
@@ -50,23 +48,7 @@ public sealed class GameActivity : SDLActivity
 
         _multicast = (GetSystemService(WifiService) as WifiManager)?.CreateMulticastLock(MulticastTag);
         _multicast?.Acquire();
-
-        _backdrop = new Backdrop(this);
-        var full = ViewGroup.LayoutParams.MatchParent;
-        AddContentView(_backdrop, new ViewGroup.LayoutParams(full, full));
     }
-
-    // The game drew: the backdrop goes (UI thread).
-    private void HideBackdrop() => RunOnUiThread(() =>
-    {
-        if (_backdrop?.Parent is not ViewGroup parent)
-        {
-            return;
-        }
-
-        parent.RemoveView(_backdrop);
-        _backdrop = null;
-    });
 
     protected override void OnDestroy()
     {
@@ -85,10 +67,23 @@ public sealed class GameActivity : SDLActivity
         var data = Intent?.GetStringExtra(DataExtra) ?? root;
         Environment.CurrentDirectory = root;
         AppContext.SetData(BaseDirectoryKey, root + Path.DirectorySeparatorChar);
-        string[] args = ["--data", data, "--mods-dir", DataSetup.Mods(root), "--log-dir", DataSetup.Logs(root)];
+        string[] args = ["--data", data, "--mods-dir", DataSetup.Mods(root), "--log-dir", DataSetup.Logs(root), .. ExtraArgs(root)];
         PlatformHooks.WindowBrightness = SetBrightness;
-        PlatformHooks.FirstFrame = HideBackdrop;
         GameMain.Run(args);
+    }
+
+    /// <summary>The desktop's command line for a run on the phone (a demo to profile, a map), one
+    /// argument per line in args.txt in the user folder, e.g. <c>--timedemo</c> / <c>bench-m1</c>.
+    /// Only adb and the user reach that folder.</summary>
+    private static string[] ExtraArgs(string root)
+    {
+        var file = Path.Combine(root, ArgsFile);
+        if (!File.Exists(file))
+        {
+            return [];
+        }
+
+        return File.ReadAllLines(file).Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
     }
 
     /// <summary>The window's own brightness (0..1; -1: the system's, adaptive included), on the UI

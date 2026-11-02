@@ -54,13 +54,41 @@ internal sealed class Backdrop : View
     public Backdrop(Activity activity) : base(activity)
     {
         Id = ViewId;
-        _bitmap = BitmapFactory.DecodeResource(activity.Resources, Resource.Mipmap.ic_launcher);
+        _bitmap = Icon(activity);
         _name.Color = Red;
         _name.TextAlign = Paint.Align.Center;
         _name.FakeBoldText = true;
         _name.LetterSpacing = NameSpacing;
         _line.Color = Red;
         _line.Alpha = LineAlpha;
+    }
+
+    // The launcher icon as a bitmap. From Android 8 it is an adaptive icon (XML), which
+    // BitmapFactory can't decode (null: no icon was drawn), so the drawable paints into one.
+    private static Bitmap? Icon(Activity activity)
+    {
+        if (activity.Resources?.GetDrawable(Resource.Mipmap.ic_launcher, activity.Theme) is not { } icon)
+        {
+            return null;
+        }
+
+        var side = Math.Max(icon.IntrinsicWidth, 192);
+        var bitmap = Bitmap.CreateBitmap(side, side, Bitmap.Config.Argb8888!)!;
+        icon.SetBounds(0, 0, side, side);
+        icon.Draw(new Canvas(bitmap));
+        return bitmap;
+    }
+
+    /// <summary>The backdrop as the activity's content, once: only with the first dialog, so a
+    /// normal start (no dialog) goes straight to the game. UI thread.</summary>
+    public static void Ensure(Activity activity)
+    {
+        if (activity.FindViewById(ViewId) is Backdrop)
+        {
+            return;
+        }
+
+        activity.SetContentView(new Backdrop(activity));
     }
 
     /// <summary>A shown dialog moves right of the icon, undimmed. UI thread.</summary>

@@ -36,6 +36,8 @@ public sealed partial class DosHud : IDisposable
     public const int EmptyBarIndex = 0x7A;
     public const int StatusIndex = 0xB3;
     public const int StatusShadowIndex = 0x7F;
+    // The satchel countdown's colour (0x1381a2 passes 0x20408 to FUN_0012f7bb: colour 8, FONT0004, centred).
+    private const int CountdownIndex = 0x08;
 
     /// <summary>The crosshair colours of the Godot port (crosshair.gd).</summary>
     public static readonly Vector4 FootColour = new(0.55f, 1f, 0.65f, 0.85f);
@@ -259,6 +261,7 @@ public sealed partial class DosHud : IDisposable
         }
 
         DrawStatus(text, frame);
+        DrawCountdown(state, frame);
     }
 
     /// <summary>A point of the HUD's screen (320 × 200, or 640 × 480 in the hi-res text) in the panel's 320 × 40.</summary>
@@ -395,6 +398,25 @@ public sealed partial class DosHud : IDisposable
             TextBatcher.DrawShadowed(_renderer, font, line, new Vector2(StatusQueue.LineX * pixel, y * pixel), pixel,
                 _art.Colour(colour), _art.Colour(StatusShadowIndex));
         }
+    }
+
+    /// <summary>The satchel's countdown (0x1381a2): centred at x 160, its bottom at y 158 of a view
+    /// that ends at 160, i.e. 2 px over the view's bottom edge, in the status lines' 0x7F shadow at +1,+1.</summary>
+    private void DrawCountdown(in HudState s, Frame f)
+    {
+        var font = TextFont;
+        if (font == null || HudFormat.Countdown(s.Countdown) is not { } line)
+        {
+            return;
+        }
+
+        // The view's bottom: over the panel, or the screen's when F6 hid it.
+        var bottom = f.Height - (s.PanelHidden ? 0 : BottomPixels(f.Width, f.Height));
+        var lift = SetY(ScreenHeight - PanelHeight) - SetY(158) + font.LineHeight;
+        var pixel = UiMetrics.TextPixel(f.Scale, font.LineHeight, PxPerMm) * f.Unit;
+        var at = new Vector2(MathF.Floor(f.Width * 0.5f) * f.Unit, bottom * f.Unit - lift * pixel);
+        TextBatcher.DrawShadowed(_renderer, font, line, at, pixel, _art.Colour(CountdownIndex), _art.Colour(StatusShadowIndex),
+            align: TextAlign.Centre);
     }
 
     private void DrawCrosshair(in HudState s, Frame f)

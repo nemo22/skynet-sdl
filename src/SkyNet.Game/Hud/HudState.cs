@@ -39,6 +39,8 @@ public struct HudState
     public bool CrosshairHidden;
     /// <summary>The aim point in screen pixels; null: the middle of the view above the panel (DOS (160,80)).</summary>
     public Vector2? AimPoint;
+    /// <summary>Seconds a planted satchel has left (<see cref="HudFormat.Countdown"/>); negative: none.</summary>
+    public float Countdown;
 
     public static HudState Empty => new()
     {
@@ -46,6 +48,7 @@ public struct HudState
         PrimaryRecord = -1, PrimaryAmmo = -1,
         SecondaryRecord = -1, SecondaryAmmo = -1,
         Bearing = -1,
+        Countdown = -1f,
     };
 }
 
@@ -78,6 +81,24 @@ public static class HudFormat
     private static readonly string?[] Counts = new string?[10000];
 
     private static string Count(int n) => Counts[n] ??= n.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>The satchel's countdown (DOS v1.01 act 0x1A, 0x138102; drawn by 0x1381a2):
+    /// "Detonation in:" + two digits + " secs.", the digits p4 (15) less the seconds gone rounded,
+    /// i.e. the seconds left rounded half down. Null for a negative <paramref name="left"/>.</summary>
+    public static string? Countdown(float left)
+    {
+        if (left < 0f)
+        {
+            return null;
+        }
+
+        var shown = Math.Clamp((int)MathF.Ceiling(left - 0.5f), 0, CountdownMax);
+        return Countdowns[shown] ??= string.Create(CultureInfo.InvariantCulture, $"Detonation in:{shown:00} secs.");
+    }
+
+    // The countdown's two digits (FUN_00146b00 with 2), and its text made once.
+    private const int CountdownMax = 99;
+    private static readonly string?[] Countdowns = new string?[CountdownMax + 1];
 
     /// <summary>RADCOUNT.CFA's frame: SAFE / CAUTION / DANGER (the fourth is never shown).</summary>
     public static int RadFrame(float dose) => dose < 1f ? 0 : dose < 35f ? 1 : 2;

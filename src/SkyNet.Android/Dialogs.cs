@@ -67,6 +67,7 @@ internal static class Dialogs
 
     private static AlertDialog Present(Activity activity, AlertDialog.Builder builder)
     {
+        Backdrop.Ensure(activity);
         var dialog = builder.Show()!;
         Backdrop.Place(activity, dialog);
         return dialog;

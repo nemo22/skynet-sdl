@@ -38,7 +38,11 @@ public static class ModContent
     private sealed record Mounted(VirtualFileSystem? Files, VirtualFileSystem? Tables, IReadOnlyList<string> Enabled,
         IReadOnlyList<string> TablesFrom, bool HasTextures, bool HasModels,
         ConcurrentDictionary<(int Bank, int Record, bool Opaque), HdTexture?> Textures,
-        ConcurrentDictionary<string, ModelReplacement?> Models, ConcurrentDictionary<string, RobotReplacement?> Robots);
+        ConcurrentDictionary<string, ModelReplacement?> Models, ConcurrentDictionary<string, RobotReplacement?> Robots)
+    {
+        /// <summary>Where the decoded HD textures are kept on disk (<see cref="TextureCache"/>); null: not kept.</summary>
+        public string? CacheDir { get; init; }
+    }
 
     private static Mounted _mounted = new(null, null, [], [], false, false, new(), new(StringComparer.OrdinalIgnoreCase),
         new(StringComparer.OrdinalIgnoreCase));
@@ -72,6 +76,7 @@ public static class ModContent
     /// the textures and models at the next map).</summary>
     public static void Mount(string modsDirectory, IReadOnlyList<string> names, bool tables = true)
     {
+        var started = Stopwatch.GetTimestamp();
         var found = new ContentRoot(modsDirectory).Discover().ToDictionary(m => m.Name, VfsPath.Comparer);
         var vfs = new VirtualFileSystem();
         var mounted = new List<string>();
@@ -102,6 +107,14 @@ public static class ModContent
         }
 
         Mount(vfs, mounted, tables);
+        var now = Now;
+        if (ReferenceEquals(now.Files, vfs))
+        {
+            Interlocked.CompareExchange(ref _mounted, now with { CacheDir = TextureCache.RootOf(Path.GetFullPath(modsDirectory)) }, now);
+        }
+
+        // The file lists and tables only: models and textures are read when a map asks for them.
+        Log.Info("Mods", $"Mounted in {Stopwatch.GetElapsedTime(started).TotalMilliseconds:0} ms");
     }
 
     /// <summary>An exception a mod's bad data must not be caught for (the process itself is in
@@ -233,7 +246,7 @@ public static class ModContent
         JobSystem.Shared.ParallelFor(todo.Count, 1, new ActionFor(i =>
         {
             var t = todo[i];
-            next[(t.Bank, t.Record, t.Opaque)] = Decode(vfs, t.Bank, t.Record, t.Opaque, t.Width, detail);
+            next[(t.Bank, t.Record, t.Opaque)] = Cached(vfs, mounted.CacheDir, t.Bank, t.Record, t.Opaque, t.Width, detail);
         }));
         // Published only over the snapshot it was made for (a mount meanwhile has its own, empty set).
         Interlocked.CompareExchange(ref _mounted, mounted with { Textures = next }, mounted);
@@ -275,20 +288,49 @@ public static class ModContent
         }
 
         var detail = Detail;
-        return mounted.Textures.GetOrAdd((bank, record, opaque), k => Decode(vfs, k.Bank, k.Record, k.Opaque, width, detail));
+        return mounted.Textures.GetOrAdd((bank, record, opaque), k => Cached(vfs, mounted.CacheDir, k.Bank, k.Record, k.Opaque, width, detail));
+    }
+
+    /// <summary>A record's HD texture from the disk cache (<paramref name="cacheDir"/>, null: none)
+    /// when it holds this PNG's decode, else decoded and stored there.</summary>
+    private static HdTexture? Cached(VirtualFileSystem vfs, string? cacheDir, int bank, int record, bool opaque, int width, Detail detail)
+    {
+        if (vfs.TryReadAllBytes(TexturePath(bank, record)) is not { } bytes)
+        {
+            return null;
+        }
+
+        var normal = vfs.TryReadAllBytes(ReliefPath(bank, record, HiresTextures.NormalSuffix));
+        var rough = vfs.TryReadAllBytes(ReliefPath(bank, record, HiresTextures.RoughnessSuffix));
+        if (cacheDir == null)
+        {
+            return Decode(bytes, normal, rough, bank, record, opaque, width, detail);
+        }
+
+        var key = TextureCache.KeyOf(bytes, normal, rough, width);
+        // The mod the colour PNG comes from: each mod's decode is kept apart.
+        var mod = vfs.Resolve(TexturePath(bank, record))!.Name;
+        var path = TextureCache.PathOf(cacheDir, mod, bank, record, opaque, detail);
+        if (TextureCache.Read(path, key) is { } hit)
+        {
+            return hit;
+        }
+
+        var decoded = Decode(bytes, normal, rough, bank, record, opaque, width, detail);
+        if (decoded != null)
+        {
+            TextureCache.Write(path, key, decoded);
+        }
+
+        return decoded;
     }
 
     /// <summary>The PNG decoded, made premultiplied (or opaque: alpha ignored, as an opaque face
     /// shows the stored RGB where the record has index 0), shrunk by <paramref name="detail"/> while
     /// still a whole multiple of the record's <paramref name="width"/> (<see cref="HdDetail.Factor"/>).</summary>
-    private static HdTexture? Decode(VirtualFileSystem vfs, int bank, int record, bool opaque, int width, Detail detail)
+    private static HdTexture? Decode(byte[] bytes, byte[]? normal, byte[]? rough, int bank, int record, bool opaque, int width, Detail detail)
     {
         var path = TexturePath(bank, record);
-        if (vfs.TryReadAllBytes(path) is not { } bytes)
-        {
-            return null;
-        }
-
         if (PngImage.Decode(bytes) is not { } image)
         {
             Log.Warn("Textures", $"{path}: not a PNG SDL can read");
@@ -299,7 +341,7 @@ public static class ModContent
         var f = ShrinkBy(w, h, width, detail);
         (w, h, rgba) = HdDetail.Shrink(image, f, opaque ? Texels.Opaque : Texels.Colour);
         Premultiply(rgba, opaque);
-        return new HdTexture(w, h, rgba) { Relief = Relief(vfs, bank, record, w * f, h * f, f) };
+        return new HdTexture(w, h, rgba) { Relief = Relief(normal, rough, bank, record, w * f, h * f, f) };
     }
 
     /// <summary>The divisor of a <paramref name="w"/> x <paramref name="h"/> HD texture at
@@ -322,10 +364,9 @@ public static class ModContent
     /// <summary>The HD texture's relief layer (<see cref="HdTexture.Relief"/>) from its normal and
     /// roughness maps, when the mod has both at the texture's size (<paramref name="width"/> x
     /// <paramref name="height"/> in the file), shrunk by <paramref name="divisor"/> as the colour was.</summary>
-    private static byte[]? Relief(VirtualFileSystem vfs, int bank, int record, int width, int height, int divisor)
+    private static byte[]? Relief(byte[]? nb, byte[]? rb, int bank, int record, int width, int height, int divisor)
     {
-        if (vfs.TryReadAllBytes(ReliefPath(bank, record, HiresTextures.NormalSuffix)) is not { } nb
-            || vfs.TryReadAllBytes(ReliefPath(bank, record, HiresTextures.RoughnessSuffix)) is not { } rb)
+        if (nb == null || rb == null)
         {
             return null;
         }

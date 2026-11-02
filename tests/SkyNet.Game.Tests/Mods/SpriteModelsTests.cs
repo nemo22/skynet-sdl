@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text;
 using RetroEng.Content;
+using RetroEng.Diagnostics;
 using RetroEng.Json;
 using RetroEng.Models;
 using SkyNet.Data;
@@ -126,6 +127,54 @@ public class SpriteModelsTests
         {
             ModContent.Unmount();
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_mount_reads_no_sprite_model_until_one_is_drawn()
+    {
+        var root = Directory.CreateTempSubdirectory("skynet-mods-").FullName;
+        var lines = new InfoLines();
+        Log.AddSink(lines, LogLevel.Info);
+        try
+        {
+            var mod = Path.Combine(root, "m");
+            Directory.CreateDirectory(Path.Combine(mod, "models", "sprites"));
+            Directory.CreateDirectory(Path.Combine(mod, "tables"));
+            File.WriteAllBytes(Path.Combine(mod, "models", "sprites", "ok.glb"), Gltf.WriteGlb(Unit.Primitives, [], []));
+            File.WriteAllBytes(Path.Combine(mod, "tables", "sprite_models.json"), Json(
+                """{"rows":[{"sprite":"214/004","model":"ok.glb","scale":0,"yaw":0,"spin":0,"bob":0,"offsetY":0}]}"""));
+
+            // MODS mounts on each tap: only the file list and the tables, no model read.
+            ModContent.Mount(root, ["m"]);
+            Assert.DoesNotContain(lines.Lines, l => l.Contains("ok.glb", StringComparison.Ordinal));
+
+            // A map's load draws it: read then.
+            Assert.NotNull(SpriteModels.Drawn(214 << 7 | 4, Look.Enhanced));
+            Assert.Contains(lines.Lines, l => l.Contains("models/sprites/ok.glb", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Log.RemoveSink(lines);
+            ModContent.Unmount();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class InfoLines : ILogSink
+    {
+        public List<string> Lines { get; } = [];
+
+        public void Write(in LogEntry entry)
+        {
+            lock (Lines)
+            {
+                Lines.Add(entry.ToString());
+            }
+        }
+
+        public void Flush(bool durable = false)
+        {
         }
     }
 

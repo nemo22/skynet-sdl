@@ -104,10 +104,13 @@ public static class GameLights
     }
 
     /// <summary>Adds the weapons' lights that shine now to <paramref name="into"/>. A shot whose
-    /// table light has an impact flash lights its impact with that, not the explosion's.</summary>
-    public static void Append(List<PointLight> into, WeaponSystem weapons, ShotLightTable? table = null)
+    /// table light has an impact flash lights its impact with that, not the explosion's. Muzzle
+    /// flashes and explosions cast shadows at <paramref name="shadows"/> High only (GitHub #5): the
+    /// engine's 2 shadowed lights cost about 3 ms a frame in a fire fight, too much for a phone.</summary>
+    public static void Append(List<PointLight> into, WeaponSystem weapons, ShotLightTable? table = null, ShadowQuality shadows = ShadowQuality.Off)
     {
         table ??= ShotLightTable.Current;
+        var casts = shadows == ShadowQuality.High;
         foreach (var e in weapons.Effects)
         {
             if (e.Done || (e.Animated && e.Ammo != null && table.For(e.Ammo) is { ImpactLife: > 0f }))
@@ -118,7 +121,7 @@ public static class GameLights
             var light = e.Animated ? ExplosionLight(e) : e.Bank == WeaponSystem.FlashBank ? FlashLight(e) : default;
             if (light.Energy > 0f)
             {
-                into.Add(light);
+                into.Add(light with { CastsShadow = casts });
             }
         }
 

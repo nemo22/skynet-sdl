@@ -227,6 +227,27 @@ public class ModsMenuTests : IDisposable
     }
 
     [Fact]
+    public void Each_tap_reaches_the_game_at_once()
+    {
+        var path = Path.Combine(_dir, SettingsStore.FileName);
+        var settings = new MenuSettings();
+        var menu = OpenMods(settings, [Mod("a"), Mod("b"), Mod("c")], path);
+        var game = (SettingsRecorder)menu.Actions;
+
+        // No hidden wait on leaving the screen: each tap is mounted (cheap, the models wait for a map).
+        menu.Update(new MenuInput { Accept = true }, Frame);
+        menu.Update(new MenuInput { Down = true }, Frame);
+        menu.Update(new MenuInput { Accept = true }, Frame);
+        Assert.Equal(2, game.Applied.Count);
+        Assert.Equal(["a"], game.Applied[0].Mods);
+        Assert.Equal(["a", "b"], game.Applied[1].Mods);
+        Assert.Equal(settings.Mods, SettingsStore.Load(path).Mods);
+
+        menu.Pop();
+        Assert.Equal(2, game.Applied.Count);
+    }
+
+    [Fact]
     public void Up_and_down_move_the_selected_mod_and_system_mods_stay_locked()
     {
         var settings = new MenuSettings { Mods = ["a", "b"] };

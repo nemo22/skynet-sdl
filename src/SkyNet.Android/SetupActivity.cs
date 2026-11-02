@@ -28,7 +28,6 @@ public sealed class SetupActivity : Activity
     {
         base.OnCreate(savedInstanceState);
         AddShortcut();
-        SetContentView(new Backdrop(this));
 
         var mode = Intent?.GetBooleanExtra(SetupExtra, false) == true ? SetupMode.Menu : SetupMode.Start;
         var setup = new DataSetup(this);
@@ -56,7 +55,8 @@ public sealed class SetupActivity : Activity
         {
             if (files != null)
             {
-                StartActivity(GameActivity.For(this, files));
+                // Same task, no transition: one black screen into the game, not a second task sliding in.
+                StartActivity(GameActivity.For(this, files).AddFlags(ActivityFlags.NoAnimation));
             }
 
             Finish();

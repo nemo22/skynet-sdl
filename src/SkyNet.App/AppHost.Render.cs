@@ -331,6 +331,7 @@ internal sealed partial class AppHost
                 // player.Yaw turns counter-clockwise; the compass wants a clockwise bearing.
                 Bearing = HudFormat.Bearing(-player.Yaw, northDegrees),
                 CrosshairHidden = weapons.RocketEye != null || session.Phase != SessionPhase.Playing || dm != null && !soldier.Alive,
+                Countdown = FuseLeft(weapons),
             });
             hud.Capture(s.HudText);
         }
@@ -351,6 +352,23 @@ internal sealed partial class AppHost
             var gun = riding ? null : viewModel.Placed(s.ViewModel, s.ViewModelPose, width, height, s.HudStyle);
             SkyNet.Game.Net.DmHud.Capture(dm, s.DmHud, width, height, s.ViewProjection, s.Eye, gun, s.HudStyle);
         }
+    }
+
+    // The soonest planted satchel's seconds left, -1 for none: DOS's countdown (act 0x1A).
+    static float FuseLeft(WeaponSystem weapons)
+    {
+        var left = -1f;
+        foreach (var p in weapons.Projectiles)
+        {
+            if (p.Fuse is not { } fuse || left >= 0f && left <= fuse)
+            {
+                continue;
+            }
+
+            left = MathF.Max(fuse, 0f);
+        }
+
+        return left;
     }
 
     // The enhanced look's point lights for this frame: the level's map lights (live from its
@@ -571,6 +589,7 @@ internal sealed partial class AppHost
                         width, height, s.HudStyle, drawFlash ??= (at, size, eye) => weaponView.DrawFlash(at, size, eye)))
                 {
                     viewModel.Draw(s.ViewModel, s.ViewModelPose, width, height, s.HudStyle);
+                    DrawScope(s, width, height);
                 }
             }
 
@@ -585,10 +604,12 @@ internal sealed partial class AppHost
             map.DrawUnderwater();
         }
 
-        // The on-screen controls while fingers play (or --touch): a live frame.
+        // The on-screen controls while fingers play (or --touch): a live frame. In window pixels, as the
+        // engine places fingers, the stick and the buttons; not the frame's (smaller at a render scale).
         if (s.Live && window.Touch is { } touch)
         {
-            TouchView.Draw(renderer, touch, new Vector2(width, height), bannerFont);
+            var (windowWidth, windowHeight) = window.Size;
+            TouchView.Draw(renderer, touch, new Vector2(windowWidth, windowHeight), bannerFont);
         }
 
         // DOS's end banner over the frozen frame, centred on the view centre; the text only when the
@@ -617,14 +638,19 @@ internal sealed partial class AppHost
             return area;
         }
 
-        foreach (var button in touch.Layout(new Vector2(width, height)))
+        // The engine's layout is in window pixels (one layout a frame); the HUD's in the frame's.
+        var (windowWidth, windowHeight) = window.Size;
+        var toFrame = height / MathF.Max(windowHeight, 1f);
+        foreach (var button in touch.Layout(new Vector2(windowWidth, windowHeight)))
         {
-            if (button.Area.Top < height / 2f)
+            var a = button.Area;
+            var framed = new RectangleF(a.X * toFrame, a.Y * toFrame, a.Width * toFrame, a.Height * toFrame);
+            if (framed.Top < height / 2f)
             {
                 continue;
             }
 
-            area = area.IsEmpty ? button.Area : RectangleF.Union(area, button.Area);
+            area = area.IsEmpty ? framed : RectangleF.Union(area, framed);
         }
 
         return area;

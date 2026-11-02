@@ -196,6 +196,19 @@ public class HudFormatTests
     [InlineData(35f, 2)]
     public void RadiationFrames(float dose, int frame) => Assert.Equal(frame, HudFormat.RadFrame(dose));
 
+    [Theory]
+    [InlineData(-1f, null)]
+    [InlineData(15f, "Detonation in:15 secs.")]
+    [InlineData(14.6f, "Detonation in:15 secs.")]
+    [InlineData(14.4f, "Detonation in:14 secs.")]
+    [InlineData(9.2f, "Detonation in:09 secs.")]
+    [InlineData(0.2f, "Detonation in:00 secs.")]
+    public void CountdownReadsAsDos(float left, string? expected)
+    {
+        // DOS v1.01 0x138102 / 0x1381a2: p4 (15) less the rounded seconds gone, two digits.
+        Assert.Equal(expected, HudFormat.Countdown(left));
+    }
+
     [Fact]
     public void CompassScrollsOneRibbonTurnPerBearingTurn()
     {

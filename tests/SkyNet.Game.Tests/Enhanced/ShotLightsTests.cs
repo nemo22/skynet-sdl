@@ -24,6 +24,27 @@ public class ShotLightsTests
         public void TakeDamage(in Damage damage) { }
     }
 
+    /// <summary>GitHub #5: muzzle flashes and explosions shadow at SHADOWS High only (too dear for a
+    /// phone's Low); bolts never.</summary>
+    [Fact]
+    public void Weapon_lights_cast_shadows_at_high_only()
+    {
+        var weapons = new WeaponSystem(Table, new CollisionWorld());
+        var shooter = new Target(new Vector3(0, 40, 0), 40f);
+        Assert.True(weapons.RemoteFire(11, new Vector3(0, 40, -10), -Vector3.UnitZ, shooter));
+        Assert.Contains(weapons.Effects, e => e.Bank == WeaponSystem.FlashBank);
+        var boltRange = ShotLightTable.Default.For(weapons.Projectiles[0].Ammo)!.Value.Range;
+
+        var high = new List<PointLight>();
+        GameLights.Append(high, weapons, ShotLightTable.Default, ShadowQuality.High);
+        var low = new List<PointLight>();
+        GameLights.Append(low, weapons, ShotLightTable.Default, ShadowQuality.Low);
+
+        Assert.Contains(high, l => l.CastsShadow);
+        Assert.DoesNotContain(high, l => l.CastsShadow && l.Range == boltRange);
+        Assert.DoesNotContain(low, l => l.CastsShadow);
+    }
+
     [Fact]
     public void LasersGetTheirClassAndColourFromTheAmmoTable()
     {

@@ -400,6 +400,86 @@ public class ModContentTests
     }
 
     [Fact]
+    public void A_decoded_texture_is_cached_on_disk_bit_identical_and_rebuilt_when_broken_or_stale()
+    {
+        var root = Directory.CreateTempSubdirectory("skynet-mods-").FullName;
+        try
+        {
+            var folder = Path.Combine(root, "hd", "textures", "TEXTURE.210");
+            Directory.CreateDirectory(folder);
+            var png = Path.Combine(folder, "003.png");
+            File.WriteAllBytes(png, Png(8, 8, [200, 100, 50, 128]));
+            File.WriteAllBytes(Path.Combine(folder, "003" + HiresTextures.NormalSuffix + ".png"), Png(8, 8, [128, 128, 255, 255]));
+            File.WriteAllBytes(Path.Combine(folder, "003" + HiresTextures.RoughnessSuffix + ".png"), Png(8, 8, [200, 200, 200, 255]));
+            ModContent.UseDetail(Detail.Medium);
+            ModContent.Mount(root, ["hd"]);
+            var decoded = ModContent.Texture(210, 3, opaque: false, width: 2)!;
+            var cached = Assert.Single(Directory.GetFiles(Path.Combine(TextureCache.RootOf(root), "hd"), "*", SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetFileSystemEntries(root, ".*"));
+
+            // A new mount reads the cache: the same pixels and relief, byte for byte.
+            ModContent.Mount(root, ["hd"]);
+            var read = ModContent.Texture(210, 3, opaque: false, width: 2)!;
+            Assert.Equal((decoded.Width, decoded.Height), (read.Width, read.Height));
+            Assert.Equal(decoded.Rgba, read.Rgba);
+            Assert.Equal(decoded.Relief, read.Relief);
+
+            // A broken file is decoded again and rewritten.
+            File.WriteAllBytes(cached, [1, 2, 3]);
+            ModContent.Mount(root, ["hd"]);
+            Assert.Equal(decoded.Rgba, ModContent.Texture(210, 3, opaque: false, width: 2)!.Rgba);
+            Assert.True(new FileInfo(cached).Length > 3);
+
+            // A changed PNG is not served from the old entry.
+            File.WriteAllBytes(png, Png(8, 8, [0, 255, 0, 255]));
+            ModContent.Mount(root, ["hd"]);
+            Assert.Equal(new byte[] { 0, 255, 0, 255 }, ModContent.Texture(210, 3, opaque: false, width: 2)!.Rgba[..4]);
+        }
+        finally
+        {
+            ModContent.UseDetail(Detail.High);
+            ModContent.Unmount();
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(TextureCache.RootOf(root), recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Two_mods_with_one_texture_are_cached_apart_and_a_new_order_rewrites_nothing()
+    {
+        var root = Directory.CreateTempSubdirectory("skynet-mods-").FullName;
+        try
+        {
+            foreach (var (mod, red) in new[] { ("a", (byte)10), ("b", (byte)20) })
+            {
+                var folder = Path.Combine(root, mod, "textures", "TEXTURE.210");
+                Directory.CreateDirectory(folder);
+                File.WriteAllBytes(Path.Combine(folder, "003.png"), Png(8, 8, [red, 0, 0, 255]));
+            }
+
+            // Each order caches the winning mod's decode in that mod's own folder.
+            ModContent.Mount(root, ["a", "b"]);
+            Assert.Equal(20, ModContent.Texture(210, 3, opaque: false, width: 2)!.Rgba[0]);
+            ModContent.Mount(root, ["b", "a"]);
+            Assert.Equal(10, ModContent.Texture(210, 3, opaque: false, width: 2)!.Rgba[0]);
+            var cache = TextureCache.RootOf(root);
+            var entries = new[] { "a", "b" }.Select(m => Assert.Single(Directory.GetFiles(Path.Combine(cache, m), "*", SearchOption.AllDirectories))).ToArray();
+            var written = entries.Select(File.GetLastWriteTimeUtc).ToArray();
+
+            // Back to the first order: read from b's entry, no file written again.
+            ModContent.Mount(root, ["a", "b"]);
+            Assert.Equal(20, ModContent.Texture(210, 3, opaque: false, width: 2)!.Rgba[0]);
+            Assert.Equal(written, entries.Select(File.GetLastWriteTimeUtc).ToArray());
+        }
+        finally
+        {
+            ModContent.Unmount();
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(TextureCache.RootOf(root), recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_surface_is_made_again_at_a_new_detail()
     {
         try

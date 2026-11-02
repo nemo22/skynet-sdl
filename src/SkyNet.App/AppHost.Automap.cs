@@ -76,6 +76,19 @@ internal sealed partial class AppHost
         return true;
     }
 
+    // The level's automap index, built once per level: during the load (EnterLevel), so the first
+    // frame does not (it reads every model of the map: a third of a second here, seconds on a phone).
+    void PrepareAutomap()
+    {
+        if (level == null || ReferenceEquals(level, automapLevel))
+        {
+            return;
+        }
+
+        automapIndex = AutomapIndex.Build(level.Map, data.LoadModel);
+        automapLevel = level;
+    }
+
     // DOS FUN_00136fb1 after each frame: what the soldier's view holds is seen.
     void MarkSeen(Matrix4x4 viewProjection, Vector3 eye)
     {
@@ -84,11 +97,7 @@ internal sealed partial class AppHost
             return;
         }
 
-        if (!ReferenceEquals(level, automapLevel))
-        {
-            automapIndex = AutomapIndex.Build(level.Map, data.LoadModel);
-            automapLevel = level;
-        }
+        PrepareAutomap();
 
         // The game view's far clip (indoors none), as Level.Draw has it.
         var far = level.Outdoor || level.FarOverride != null ? level.Far : float.MaxValue;

@@ -19,7 +19,8 @@ public sealed class WeaponRenderer
 
     private readonly Renderer _renderer;
     private readonly GameData _data;
-    private readonly TextureStore _textures;
+    /// <summary>Made again at every map: what is first made on a map dies with its scope (MapReleased).</summary>
+    private TextureStore _textures;
     private readonly TextureHandle _palette;
     private readonly MeshHandle _quad;
     private readonly Dictionary<(int Bank, int Record), (GpuTexture Texture, Material Material)?> _sprites = [];
@@ -62,8 +63,16 @@ public sealed class WeaponRenderer
         ], [0, 1, 2, 0, 2, 3]);
     }
 
-    /// <summary>The map's scope was released: the drops' models made in it are made again.</summary>
-    public void MapReleased() => _spriteModels.Release();
+    /// <summary>The map's scope was released: the drops' models, sprites and bolts made in it are made
+    /// again. A sprite first made on a map (a robot's death blast, bank 358) kept past its scope draws a
+    /// stale handle the renderer drops: no explosion after a load or a map change (issues #10, #13).</summary>
+    public void MapReleased()
+    {
+        _spriteModels.Release();
+        _sprites.Clear();
+        _models.Clear();
+        _textures = new TextureStore(_renderer, _data);
+    }
 
     /// <summary>The look: with the enhanced <paramref name="lighting"/> the effects (impacts,
     /// explosions, the muzzle flare) are unlit and the other sprites take the hemisphere's light

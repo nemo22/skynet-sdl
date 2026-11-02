@@ -3,6 +3,32 @@
 Version in `Directory.Build.props`. Each batch of changes raises it: a fix
 the patch number, a feature the minor. Releases on GitHub start at 1.0.0.
 
+## 1.2.1 (2026-11-02)
+
+Movies, weapon light shadows, the laser rifle's scope, and fixes from
+GitHub issues.
+
+- The game's .VID movies play at DOS's moments: the intro, mission
+  briefings, the after-win scenes, the ending and Future Shock's intro
+  (#6). Any key, click, tap or pad button skips.
+- Muzzle flashes and explosions cast shadows at SHADOWS High (#5).
+- The laser rifle's monitor shows a live 2x zoom in green, as in DOS
+  (#12).
+- The satchel shows "Detonation in:NN secs." above the panel (#15).
+- Explosions show again after a save load or a map change (#10, #13).
+- Future Shock pickups show their names, not str_ keys (#14).
+- Android: a finger held on FIRE also aims when dragged; touch
+  controls are drawn where they react; the first start shows its
+  progress instead of a still screen (#11); the start no longer
+  flashes; the app is declared a game with performance and battery
+  modes, and asks Android for performance (ADPF).
+- Decoded HD textures are cached in cache/, so later loads skip the
+  PNG decode; map exits inside a mission load behind the last frame
+  without the loading screen.
+- MODS taps on the title take milliseconds instead of seconds; a
+  played demo returns to the title.
+- RetroEng 0.50.0.
+
 ## 1.2.0 (2026-10-28)
 
 Android setup, touch controls, speed, and fixes from GitHub issues.

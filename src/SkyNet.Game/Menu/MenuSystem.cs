@@ -238,6 +238,8 @@ public sealed class MenuSystem
     private readonly List<MenuScreen> _stack = [];
     private float _toastLeft;
     private Look _look;
+    // The mission whose briefing last played its movie by itself (OpenMission).
+    private (GameKind Game, int Mission)? _briefed;
 
     public MenuSystem(IMenuActions actions, MenuSettings settings, MenuContext? context = null, string? settingsPath = null)
     {
@@ -303,8 +305,16 @@ public sealed class MenuSystem
     /// <summary>The mission screen: BEGIN / BRIEFING / TACTICAL / STATISTICS.</summary>
     public MissionScreen OpenMission(MissionBriefing briefing)
     {
+        // The briefing's movie plays by itself on the mission's first briefing only (a restart's, a
+        // reload's: the BRIEFING tab still plays it); another mission plays its own again.
+        var first = briefing.Movie != null && _briefed != (briefing.Game, briefing.Mission);
+        if (first)
+        {
+            _briefed = (briefing.Game, briefing.Mission);
+        }
+
         InGame = true;
-        var screen = new MissionScreen(briefing);
+        var screen = new MissionScreen(briefing) { AutoPlay = first };
         Replace(screen);
         return screen;
     }

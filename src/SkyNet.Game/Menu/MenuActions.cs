@@ -59,6 +59,11 @@ public interface IMenuActions
     void StopDedicated()
     {
     }
+
+    /// <summary>A movie (.VID) by name over the menus, as <paramref name="place"/> puts it (the BRIEFING tab's SEQnn).</summary>
+    void PlayMovie(string name, MoviePlace place)
+    {
+    }
 }
 
 /// <summary><see cref="IMenuActions"/> as closures, for the app's wiring.</summary>
@@ -74,6 +79,7 @@ public sealed class MenuEvents : IMenuActions
     public Action? OnStopNetGame;
     public Func<Net.DmRunOptions, (Net.DmDedicated? Server, string? Error)>? OnStartDedicated;
     public Action? OnStopDedicated;
+    public Action<string, MoviePlace>? OnPlayMovie;
 
     public void StartGame(GameKind game, int mission, Campaign.Pilot pilot) => OnStartGame?.Invoke(game, mission, pilot);
     public void BeginMission() => OnBeginMission?.Invoke();
@@ -87,6 +93,7 @@ public sealed class MenuEvents : IMenuActions
     public void Sound(string name) => OnSound?.Invoke(name);
     public void StopNetGame() => OnStopNetGame?.Invoke();
     public void StopDedicated() => OnStopDedicated?.Invoke();
+    public void PlayMovie(string name, MoviePlace place) => OnPlayMovie?.Invoke(name, place);
 
     public Net.DmDedicated? StartDedicated(Net.DmRunOptions options, out string? error)
     {

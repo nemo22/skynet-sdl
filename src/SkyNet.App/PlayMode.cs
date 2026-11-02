@@ -88,7 +88,15 @@ internal sealed partial class AppHost
         var started = Stopwatch.GetTimestamp();
         using (Prof.Zone(AppZones.Session))
         {
-            controls.Tick(session, tick, weaponInput);
+            try
+            {
+                loadScreen = LoadScreen.Hidden;
+                controls.Tick(session, tick, weaponInput);
+            }
+            finally
+            {
+                loadScreen = LoadScreen.Shown;
+            }
         }
 
         recording?.AfterTick(session, tick);

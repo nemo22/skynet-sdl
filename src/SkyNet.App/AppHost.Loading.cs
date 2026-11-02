@@ -22,6 +22,13 @@ internal sealed partial class AppHost
     private static readonly Rectangle LoadingBar = new(16, 186, 288, 6);
     private static readonly Vector4 LoadingShade = new(0f, 0f, 0f, 0.75f);
 
+    /// <summary>Whether a slow level load draws loading frames.</summary>
+    private enum LoadScreen { Shown, Hidden }
+
+    // Hidden while the session ticks: an exit (truck -> outside) or the torpedo ride swaps the map
+    // behind the last game frame, as DOS does. A mission's start, even one reached in a tick, shows it.
+    private LoadScreen loadScreen = LoadScreen.Shown;
+
     // The loading frames drawn since the last log line and their cost.
     private int loadingFrames;
     private long loadingTicks;
@@ -38,7 +45,7 @@ internal sealed partial class AppHost
             return;
         }
 
-        if (elapsedMs < LongLoadMs)
+        if (loadScreen == LoadScreen.Hidden || elapsedMs < LongLoadMs)
         {
             return;
         }
@@ -68,7 +75,13 @@ internal sealed partial class AppHost
         menuPainter.Fill(LoadingBand, LoadingShade);
         menuPainter.TextIn(MenuLayout.NetFont, text, LoadingLine, MenuPainter.TextGreen);
         menuPainter.Outline(LoadingBar, MenuPainter.TextGreen);
-        menuPainter.Fill(LoadingBar with { Width = (int)(LoadingBar.Width * Math.Clamp(fraction, 0f, 1f)) }, MenuPainter.TextGreen);
+        // An empty bar draws nothing: the engine fills the whole window for a zero-width rectangle.
+        var filled = (int)(LoadingBar.Width * Math.Clamp(fraction, 0f, 1f));
+        if (filled > 0)
+        {
+            menuPainter.Fill(LoadingBar with { Width = filled }, MenuPainter.TextGreen);
+        }
+
         renderer.Present(new View(Matrix4x4.Identity, Matrix4x4.Identity, Vector3.Zero), new Vector4(0f, 0f, 0f, 1f));
         loadingFrames++;
         loadingTicks += Stopwatch.GetTimestamp() - started;

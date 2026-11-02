@@ -20,6 +20,8 @@ public sealed record MissionBriefing(GameKind Game, int Mission, int Map, Briefi
     /// <summary>The name and call sign the briefing's #N / #C codes stand for (Future Shock's
     /// briefings use them; FUN_0012daa8 from the briefing screen 0x12c800).</summary>
     public Campaign.Pilot Pilot { get; init; } = Campaign.Pilot.None;
+    /// <summary>The movie the BRIEFING tab plays first (<see cref="Campaign.Mission.BriefingMovie"/>); null: none.</summary>
+    public string? Movie { get; init; }
 }
 
 /// <summary>One page of the BRIEFING tab: its picture (.IMG and palette), title and text.</summary>
@@ -79,6 +81,9 @@ public sealed class MissionScreen : MenuScreen
 
     public override bool OverGame => false;
 
+    /// <summary>Opens on the BRIEFING tab's movie (the mission's first briefing; <see cref="MenuSystem.OpenMission"/>).</summary>
+    internal bool AutoPlay { get; init; }
+
     public override void Tick(float seconds)
     {
         base.Tick(seconds);
@@ -133,6 +138,10 @@ public sealed class MissionScreen : MenuScreen
         Add(new MenuItem("down", BriefDown) { Activate = () => Step(1) });
         Add(new MenuItem("picture", BriefPicture) { Activate = () => NextDossier(1) });
         Highlight = 0; // BEGIN: Enter starts the mission, as in the Godot port.
+        if (AutoPlay)
+        {
+            Open(MissionTab.Briefing);
+        }
     }
 
     public void Open(MissionTab tab)
@@ -145,6 +154,17 @@ public sealed class MissionScreen : MenuScreen
 
         Tab = tab;
         Scroll = 0;
+        if (tab != MissionTab.Briefing)
+        {
+            return;
+        }
+
+        // BRIEFING (tab handler 0x12d71a): the mission's movie, then the [EN] page.
+        Page = 0;
+        if (_briefing.Movie is { } movie)
+        {
+            Menu.Actions.PlayMovie(movie, MoviePlace.Briefing);
+        }
     }
 
     /// <summary>Down / up: scrolls the page's text, past its end to the next page (TACTICAL: the next dossier).</summary>

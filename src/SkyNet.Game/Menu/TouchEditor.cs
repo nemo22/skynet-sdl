@@ -6,11 +6,12 @@ namespace SkyNet.Game.Menu;
 
 /// <summary>Editing where the on-screen controls are (CONTROLS → TOUCH LAYOUT): a control is
 /// dragged by any part of it (past <see cref="DragStart"/>, so a tap only selects), SMALLER / BIGGER
-/// resize the selected button (the stick keeps the engine's size), RESET brings the selected
+/// resize the selected control (the stick and the pause button too), RESET brings the selected
 /// control's default back (again, or with none selected: every default), SAVE keeps the edits,
-/// CANCEL drops them. A tap off the controls keeps the selection. The tools' row stands at the top,
+/// CANCEL drops them. A tap off the controls keeps the selection. No control overlaps the pause
+/// button: a moved control is pushed out of it, a move that still overlaps is refused. The tools' row stands at the top,
 /// at the bottom while the selected control is in the top half. Controls stay in the
-/// <see cref="TouchRoom"/> (above the HUD panel, off the pause button).
+/// <see cref="TouchRoom"/> (above the HUD panel).
 /// Any unit (the menu's canvas): <see cref="Measure"/> gives the room in it.
 /// <code>
 ///    [RESET]     [SMALLER] [BIGGER] [CANCEL] [SAVE]
@@ -32,6 +33,9 @@ internal sealed class TouchEditor
 
     /// <summary>A finger moves a control only past this many button sides (a tap's wobble selects).</summary>
     private const float DragStart = 0.3f;
+
+    /// <summary>Areas this close (button sides) touch, not overlap: a place's rounding.</summary>
+    private const float Touching = 0.01f;
 
     /// <summary>SMALLER / BIGGER step, in buttons.</summary>
     private const float SizeStep = 0.1f;
@@ -68,8 +72,8 @@ internal sealed class TouchEditor
     /// <summary>The edited places.</summary>
     public TouchLayout Layout { get; }
 
-    /// <summary>The controls, hit in this order (the stick under the buttons).</summary>
-    public IEnumerable<string> Ids => _buttons.Select(b => b.Label).Append(TouchLayout.StickId);
+    /// <summary>The controls, hit in this order (the stick under the buttons and pause).</summary>
+    public IEnumerable<string> Ids => _buttons.Select(b => b.Label).Append(TouchLayout.PauseId).Append(TouchLayout.StickId);
 
     public string? Selected { get; private set; }
 
@@ -98,9 +102,10 @@ internal sealed class TouchEditor
     }
 
     /// <summary>A control's square (the stick: its full push).</summary>
-    public RectangleF AreaOf(string id)
+    public RectangleF AreaOf(string id) => Area(id, SpotOf(id));
+
+    private RectangleF Area(string id, TouchSpot spot)
     {
-        var spot = SpotOf(id);
         var centre = TouchLayout.Centre(spot, _room.Screen, _room.Side);
         var half = TouchLayout.Reach(id, spot.Size) * _room.Side;
         return new RectangleF(centre.X - half, centre.Y - half, 2f * half, 2f * half);
@@ -194,15 +199,22 @@ internal sealed class TouchEditor
         Layout.Reset();
     }
 
-    /// <summary>The selected button grows (+1) or shrinks (-1) about its centre; the stick keeps its size.</summary>
+    /// <summary>The selected control grows (+1) or shrinks (-1) about its centre (a floating stick
+    /// stays floating).</summary>
     public void Grow(int step)
     {
-        if (Selected is not { } part || part == TouchLayout.StickId)
+        if (Selected is not { } part)
         {
             return;
         }
 
         var spot = SpotOf(part);
+        if (part == TouchLayout.StickId && Layout.Stick == null)
+        {
+            Layout.Resize(part, spot.Size + step * SizeStep);
+            return;
+        }
+
         Place(part, TouchLayout.Centre(spot, _room.Screen, _room.Side), spot.Size + step * SizeStep);
     }
 
@@ -213,13 +225,59 @@ internal sealed class TouchEditor
             return;
         }
 
-        Layout.Set(id, TouchLayout.SpotAt(id, centre, size, _room));
+        var spot = TouchLayout.SpotAt(id, centre, size, _room);
+        if (id != TouchLayout.PauseId)
+        {
+            spot = TouchLayout.SpotAt(id, OffPause(id, spot), spot.Size, _room);
+        }
+
+        if (OnPause(id, spot))
+        {
+            return;
+        }
+
+        Layout.Set(id, spot);
+    }
+
+    /// <summary>A spot's centre pushed out of the pause button by the shortest way that stays in
+    /// the room; unmoved when none does (the move is then refused).</summary>
+    private Vector2 OffPause(string id, TouchSpot spot)
+    {
+        var at = TouchLayout.Centre(spot, _room.Screen, _room.Side);
+        var half = TouchLayout.Reach(id, spot.Size) * _room.Side;
+        var keep = RectangleF.Inflate(AreaOf(TouchLayout.PauseId), half, half);
+        if (!keep.Contains(at.X, at.Y))
+        {
+            return at;
+        }
+
+        var floor = MathF.Min(_room.Floor, _room.Screen.Y) - half;
+        Vector2[] ways = [new(keep.Left, at.Y), new(keep.Right, at.Y), new(at.X, keep.Top), new(at.X, keep.Bottom)];
+        var fits = ways.Where(w => w.X >= half && w.X <= _room.Screen.X - half && w.Y >= half && w.Y <= floor);
+        return fits.DefaultIfEmpty(at).MinBy(w => Vector2.DistanceSquared(w, at));
+    }
+
+    /// <summary>A control at a spot and the pause button overlap (more than <see cref="Touching"/> of a side).</summary>
+    private bool OnPause(string id, TouchSpot spot)
+    {
+        var area = RectangleF.Inflate(Area(id, spot), -Touching * _room.Side, -Touching * _room.Side);
+        if (id != TouchLayout.PauseId)
+        {
+            return area.IntersectsWith(AreaOf(TouchLayout.PauseId));
+        }
+
+        return Ids.Where(other => other != id).Any(other => area.IntersectsWith(AreaOf(other)));
     }
 
     /// <summary>A control's spot; a placed one kept in the room (a hand-edited file may put it off).</summary>
     private TouchSpot SpotOf(string id)
     {
-        var fallback = id == TouchLayout.StickId ? TouchLayout.StickDefault : Grid(id);
+        var fallback = id switch
+        {
+            TouchLayout.StickId => TouchLayout.StickDefault,
+            TouchLayout.PauseId => TouchLayout.PauseDefault,
+            _ => Grid(id),
+        };
         var spot = Layout.SpotOf(id, fallback);
         if (spot == fallback || _room.Side <= 0f)
         {

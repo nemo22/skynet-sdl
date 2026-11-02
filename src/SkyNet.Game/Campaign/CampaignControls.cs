@@ -66,7 +66,8 @@ public sealed class CampaignControls
         // The on-screen buttons (touch screens): columns from the right edge, rows from the bottom.
         // No automap button: the screen's space goes to the fight.
         // Each at the player's place (TOUCH LAYOUT), else in the engine's grid.
-        a.AddTouch(touch.Slot(Fire, "FIRE", 0, 0)).AddTouch(touch.Slot(Jump, "JUMP", 1, 0))
+        // FIRE aims: a finger held on it turns the view as it drags (owner request).
+        a.AddTouch(touch.Slot(Fire, "FIRE", 0, 0) with { Aim = TouchAim.Look }).AddTouch(touch.Slot(Jump, "JUMP", 1, 0))
             .AddTouch(touch.Slot(Use, "USE", 0, 1)).AddTouch(touch.Slot(Throw, "ALT", 1, 1))
             .AddTouch(touch.Slot(NextWeapon, "WPN+", 0, 2)).AddTouch(touch.Slot(PreviousWeapon, "WPN-", 1, 2));
         Player = new PlayerActions(Forward, Back, Left, Right, Run, Jump, Crouch, TurnLeft, TurnRight, LookUp, LookDown, Slide);

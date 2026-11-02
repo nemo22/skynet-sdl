@@ -60,6 +60,16 @@ public static class TouchView
             Button(renderer, area, button.Label, touch.IsHeld(button.Action) ? Shade.Held : Shade.Idle, font, line, unit);
         }
 
+        var (centre, knob) = StickDrawn(touch, screen);
+        Stick(renderer, centre, knob, touch.StickRadius(screen) * unit, line, touch.Stick != null ? Shade.Held : Shade.Idle);
+    }
+
+    /// <summary>The stick's ring centre and knob in canvas units. <paramref name="screen"/> is the window's
+    /// pixels, the unit of the engine's fingers: e.g. a finger at 1000,700 of a 2376×1060 window is drawn
+    /// at 1000,700 × CanvasHeight/1060, also when the frame is smaller (a render scale).</summary>
+    internal static (Vector2 Centre, Vector2 Knob) StickDrawn(TouchControls touch, Vector2 screen)
+    {
+        var unit = Renderer.CanvasHeight / MathF.Max(screen.Y, 1f);
         var radius = touch.StickRadius(screen);
         var home = touch.StickHome(screen) ?? TouchLayout.Centre(TouchLayout.StickDefault, screen, touch.ButtonSide(screen));
         var centre = touch.Stick ?? home;
@@ -70,7 +80,7 @@ public static class TouchView
             knob = push.Length() > radius ? stick + Vector2.Normalize(push) * radius : at;
         }
 
-        Stick(renderer, centre * unit, knob * unit, radius * unit, line, touch.Stick != null ? Shade.Held : Shade.Idle);
+        return (centre * unit, knob * unit);
     }
 
     /// <summary>A button in canvas units: its box, brackets, and icon or word.</summary>

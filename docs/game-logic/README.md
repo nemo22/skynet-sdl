@@ -24,3 +24,4 @@ its open questions).
 | [rocket-eye.md](rocket-eye.md) | rocket camera view | `fly_camera.gd` | done |
 | [automap.md](automap.md) | the automap: seen bit 0x80, 5 × 5 cell window, camera, MAPBAR/MAPGRID art, clearautomap | none (the Godot port had no automap) | done |
 | [future-shock.md](future-shock.md) | running Future Shock data on SkyNET rules: map archive, palettes, campaign order, missing WLDs, extra action ids, vehicle maps | `skynet_paths.gd`, `level_loader.gd` | done |
+| [fmv-sequences.md](fmv-sequences.md) | which .VID plays when: OPENING at start-up, SEQnn on the BRIEFING tab, after-win scenes, CREDITS/END, idle attract, FS BEGIN/END, gates | none (the Godot port had no FMV) | done |
